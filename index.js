@@ -4,7 +4,7 @@ const chalk = require('chalk');
 const cliProgress = require('cli-progress');
 require("dotenv").config();
 const { ApiPromise } = require('@polkadot/api');
-const { HttpProvider } = require('@polkadot/rpc-provider');
+const { HttpProvider, WsProvider } = require('@polkadot/rpc-provider');
 const { xxhashAsHex } = require('@polkadot/util-crypto');
 const execFileSync = require('child_process').execFileSync;
 const execSync = require('child_process').execSync;
@@ -17,7 +17,8 @@ const forkedSpecPath = path.join(__dirname, 'data', 'fork.json');
 const storagePath = path.join(__dirname, 'data', 'storage.json');
 
 // Using http endpoint since substrate's Ws endpoint has a size limit.
-const provider = new HttpProvider(process.env.HTTP_RPC_ENDPOINT || 'http://localhost:9933')
+// const provider = new HttpProvider(process.env.HTTP_RPC_ENDPOINT)
+const provider = new WsProvider(process.env.HTTP_RPC_ENDPOINT, true);
 // The storage download will be split into 256^chunksLevel chunks.
 const chunksLevel = process.env.FORK_CHUNKS_LEVEL || 1;
 const totalChunks = Math.pow(256, chunksLevel);
@@ -91,12 +92,13 @@ async function main() {
     progressBar.start(totalChunks, 0);
     const stream = fs.createWriteStream(storagePath, { flags: 'a' });
     stream.write("[");
-    await fetchChunks("0x", chunksLevel, stream, at);
+    await fetchChunks(api, "0x", chunksLevel, stream, at);
     stream.write("]");
     stream.end();
     progressBar.stop();
   }
 
+    console.log(chalk.green('Downloaded the state'));
   const metadata = await api.rpc.state.getMetadata();
   // Populate the prefixes array
   const modules = metadata.asLatest.pallets;
@@ -158,9 +160,9 @@ async function main() {
 
 main();
 
-async function fetchChunks(prefix, levelsRemaining, stream, at) {
+async function fetchChunks(api, prefix, levelsRemaining, stream, at) {
   if (levelsRemaining <= 0) {
-    const pairs = await provider.send('state_getPairs', [prefix, at]);
+    const pairs = await api.rpc.state.getKeysPaged(prefix, at);
     if (pairs.length > 0) {
       separator ? stream.write(",") : separator = true;
       stream.write(JSON.stringify(pairs).slice(1, -1));
@@ -173,12 +175,12 @@ async function fetchChunks(prefix, levelsRemaining, stream, at) {
   if (process.env.QUICK_MODE && levelsRemaining == 1) {
     let promises = [];
     for (let i = 0; i < 256; i++) {
-      promises.push(fetchChunks(prefix + i.toString(16).padStart(2, "0"), levelsRemaining - 1, stream, at));
+      promises.push(fetchChunks(api, prefix + i.toString(16).padStart(2, "0"), levelsRemaining - 1, stream, at));
     }
     await Promise.all(promises);
   } else {
     for (let i = 0; i < 256; i++) {
-      await fetchChunks(prefix + i.toString(16).padStart(2, "0"), levelsRemaining - 1, stream, at);
+      await fetchChunks(api, prefix + i.toString(16).padStart(2, "0"), levelsRemaining - 1, stream, at);
     }
   }
 }
